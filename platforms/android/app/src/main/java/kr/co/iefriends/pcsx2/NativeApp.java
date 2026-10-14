@@ -835,18 +835,41 @@ public class NativeApp {
 		return v;
 	}
 
-	// Short crisp haptic "tick" for on-screen touch button presses (issue #247),
-	// PPSSPP/Azahar-style. Driven by the device's own vibrator and INDEPENDENT of
-	// game rumble. The UI gates it via the Touch Haptics setting, so this is only
-	// invoked when enabled. Coalesced: simultaneous multi-touch presses (d-pad +
-	// face land in the same frame) collapse to ONE tick, and fast mashing is rate-
-	// limited, so the vibrator queue can't be saturated on low-end devices.
+	// Haptic pulse for on-screen touch button presses (issue #247), modelled on Vita3K's
+	// InputOverlay.triggerHapticFeedback(): a deep, solid single tap, and a softer, longer
+	// pulse while the player is drum-rolling (or mashing) so the motor keeps gliding instead
+	// of starting and stopping on every hit with a click. Driven by the device's own vibrator
+	// and INDEPENDENT of game rumble. The UI gates it via the Touch Haptics setting, so this
+	// is only invoked when enabled; the global Vibration Strength slider scales the amplitude
+	// (rumbleOne applies sHapticScale).
 	private static volatile long sLastTouchHapticMs = 0L;
+	// Vita3K's HAPTIC_DEBOUNCE_MS / HAPTIC_RAPID_WINDOW_MS.
+	private static final long TOUCH_HAPTIC_DEBOUNCE_MS = 35L;
+	private static final long TOUCH_HAPTIC_RAPID_WINDOW_MS = 85L;
 	public static void touchHaptic() {
-		long now = android.os.SystemClock.uptimeMillis();
-		if (now - sLastTouchHapticMs < 24L) return;
+		final long now = android.os.SystemClock.uptimeMillis();
+		final long delta = now - sLastTouchHapticMs;
+		// A second finger landing inside the window must not cancel the pulse already running
+		// (Vita3K's dual-hand fix): two hands hit the drum almost together, and simultaneous
+		// multi-touch presses (d-pad + face in one frame) collapse to ONE pulse.
+		if (delta < TOUCH_HAPTIC_DEBOUNCE_MS) return;
 		sLastTouchHapticMs = now;
-		try { rumbleOne(systemVibrator(), 0.6f, 12); } catch (Throwable ignored) {}
+		// Base strength is full, like Vita3K's default hapticAmplitude (255); the Vibration
+		// Strength slider scales it in rumbleOne.
+		final float norm = 1f;
+		final int ms;
+		final float intensity;
+		if (delta < TOUCH_HAPTIC_RAPID_WINDOW_MS) {
+			// Rolling: rapid hits get a soft, longer, low-amplitude pulse so the motor keeps
+			// moving smoothly instead of stopping and restarting with a clack.
+			ms = 50 + Math.round(norm * 15f);        // 50..65 ms
+			intensity = 0.33f;                       // ~1/3 power
+		} else {
+			// Single tap: a deep, solid impact.
+			ms = 45 + Math.round(norm * 40f);        // 45..85 ms
+			intensity = 1f;
+		}
+		try { rumbleOne(systemVibrator(), intensity, ms); } catch (Throwable ignored) {}
 	}
 
 	/** Index (0-based) of the [index]th connected physical gamepad, or -1. Used as a

@@ -2442,8 +2442,9 @@ private fun sendDigital(keycode: Int, pressed: Boolean) {
     // (MGS2: hold Square to aim, then ease off to cancel the shot).
     TouchControls.notePressureKeyState(port, keycode, pressed)
     NativeApp.setPadButtonForPort(port, keycode, range, pressed)
-    // Touch haptics (#247): a short vibration tick when a button goes DOWN. Press-only
-    // (release stays silent); gated by the Touch Haptics setting (default on).
+    // Touch haptics (#247): a vibration pulse when a button goes DOWN. Press-only (release
+    // stays silent); gated by the Touch Haptics setting (default on). The pulse is a deep tap,
+    // softened into a rolling buzz during fast hits (a drum roll) — see NativeApp.touchHaptic.
     if (pressed && TouchControls.touchHaptics.value) NativeApp.touchHaptic()
 }
 
