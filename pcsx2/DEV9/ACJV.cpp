@@ -20,6 +20,7 @@
 #include <array>
 #include <atomic>
 #include <string>
+#include <chrono>
 
 enum ACJVCMD {
 	UNKNOWN = -2, // unknown CMD, should fire up a warning for developer
@@ -377,7 +378,9 @@ static u16 m_jvsScreenPosY[JVS_PLAYER_COUNT] = {};
 static float m_jvsLightgunDX[JVS_PLAYER_COUNT] = {-1.0f, -1.0f};  // per-player normalized display X (-1 = off-screen)
 static float m_jvsLightgunDY[JVS_PLAYER_COUNT] = {-1.0f, -1.0f};  // per-player normalized display Y (-1 = off-screen)
 static u16 m_jvsWheelChannels[JVS_WHEEL_CHANNEL_MAX] = {};
-static u16 m_jvsDrumChannels[JVS_DRUM_CHANNEL_MAX] = {};
+static u32 m_jvsDrumMask[JVS_DRUM_CHANNEL_MAX] = {};
+static bool m_jvsDrumHeld[JVS_DRUM_CHANNEL_MAX] = {};
+static std::chrono::steady_clock::time_point m_jvsDrumHitTime[JVS_DRUM_CHANNEL_MAX];
 
 static float m_wheelSteerR = 0.0f; // stick right  -> steering positive
 static float m_wheelSteerL = 0.0f; // stick left   -> steering negative
@@ -594,10 +597,48 @@ void ACJV::SetWheelAxis(u32 axis, float value)
 	}
 }
 
+void ACJV::SetDrumHitMask(u32 channel, u32 mask)
+{
+	if (channel >= JVS_DRUM_CHANNEL_MAX)
+		return;
+	if (mask & ~m_jvsDrumMask[channel]) // 出现了新按下的键，别的键还按着也算
+		m_jvsDrumHitTime[channel] = std::chrono::steady_clock::now();
+	m_jvsDrumMask[channel] = mask;
+	m_jvsDrumHeld[channel] = (mask != 0);
+}
+
 void ACJV::SetDrumHit(u32 channel, bool pressed)
 {
-	if (channel < JVS_DRUM_CHANNEL_MAX)
-		m_jvsDrumChannels[channel] = pressed ? 0xFFFF : 0; // max -> above IN/DAI; big notes (大) emerge from hitting both sides
+	SetDrumHitMask(channel, pressed ? 1u : 0u);
+}
+
+static bool IsKaChannel(u32 ch)
+{
+	return ch == 5 || ch == 4 || ch == 1 || ch == 6; // 1P: 5/4, 2P: 1/6
+}
+
+static u16 DrumChannelValue(u32 ch)
+{
+	using namespace std::chrono;
+	const s64 age = duration_cast<microseconds>(steady_clock::now() - m_jvsDrumHitTime[ch]).count();
+
+	if (IsKaChannel(ch))
+	{
+		// ka：第一版的写法，30ms 线性衰减，松手立刻归零
+		constexpr s64 kKaDecayUs = 30000;
+		if (!m_jvsDrumHeld[ch] || age >= kKaDecayUs)
+			return 0;
+		return static_cast<u16>(0xFFFF - (0xFFFF * age) / kKaDecayUs);
+	}
+
+	// don：满值保持 25ms，再衰减 25ms，松手后脉冲照常走完
+	constexpr s64 kHoldUs = 25000;
+	constexpr s64 kDecayUs = 25000;
+	if (age < kHoldUs)
+		return 0xFFFF;
+	if (age < kHoldUs + kDecayUs)
+		return static_cast<u16>(0xFFFF - (0xFFFF * (age - kHoldUs)) / kDecayUs);
+	return 0;
 }
 
 u16 ACJV::GetButtonState(u32 player)
@@ -607,7 +648,7 @@ u16 ACJV::GetButtonState(u32 player)
 
 bool ACJV::GetDrumHit(u32 channel)
 {
-	return channel < JVS_DRUM_CHANNEL_MAX && m_jvsDrumChannels[channel] != 0;
+	return channel < JVS_DRUM_CHANNEL_MAX && m_jvsDrumHeld[channel];
 }
 
 JVS_MODE ACJV::GetMode()
@@ -667,7 +708,9 @@ void ACJV::SetGameId(const std::string& gameid)
 		m_jvsLightgunDY[p] = -1.0f;
 	}
 	std::memset(m_jvsWheelChannels, 0, sizeof(m_jvsWheelChannels));
-	std::memset(m_jvsDrumChannels, 0, sizeof(m_jvsDrumChannels));
+	std::memset(m_jvsDrumHeld, 0, sizeof(m_jvsDrumHeld));
+	std::memset(m_jvsDrumMask, 0, sizeof(m_jvsDrumMask));
+	for (auto& t : m_jvsDrumHitTime) t = {};
 	for (u32 p = 0; p < JVS_PLAYER_COUNT; p++) // clear macro state; InputManager repushes masks on the input reload
 	{
 		m_jvsMacroButtonState[p] = 0;
@@ -1196,8 +1239,9 @@ void do_jvs_packet(const u8* input, u8* output) {
 				JVS_ASSERT(channel == JVS_DRUM_CHANNEL_MAX);
 				for(int i = 0; i < JVS_DRUM_CHANNEL_MAX; i++)
 				{
-					(*output++) = static_cast<u8>(m_jvsDrumChannels[i] >> 8);
-					(*output++) = static_cast<u8>(m_jvsDrumChannels[i]);
+					const u16 v = DrumChannelValue(i);
+					(*output++) = static_cast<u8>(v >> 8);
+					(*output++) = static_cast<u8>(v);
 				}
 			}
 			else if(m_jvsMode == JVS_MODE::DRIVE)

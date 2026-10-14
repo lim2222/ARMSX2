@@ -174,6 +174,7 @@ namespace ACJV {
     void SetWheelAxis(u32 axis, float value);
     void SetDrumHit(u32 channel, bool pressed); // Taiko drum sensor -> JVS analog channel (0=off, else above DAI threshold)
     // ARMSX2: what the setters above left on the board, for ArcadeInput's tests.
+	void SetDrumHitMask(u32 channel, u32 mask);
     u16 GetButtonState(u32 player);
     bool GetDrumHit(u32 channel);
     bool GetTouchPressed();

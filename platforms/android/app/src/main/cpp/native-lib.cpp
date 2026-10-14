@@ -1339,19 +1339,28 @@ static void ArcadeApplyPad(u32 player) {
 		}
 		break;
 
-		case JVS_MODE::DRUM:
-		{
-			// 1P: Don left/right on channels 0/3, Ka left/right on 5/4. 2P: 2/7 and 1/6 (ACJV_Inputs.h).
-			const bool p1 = (player == 0);
-			ACJV::SetDrumHit(p1 ? 0 : 2, ArcadeHeld(p, GIB::DPadUp) || ArcadeHeld(p, GIB::DPadDown) ||
-				ArcadeHeld(p, GIB::DPadLeft) || ArcadeHeld(p, GIB::DPadRight));
-			ACJV::SetDrumHit(p1 ? 3 : 7, ArcadeHeld(p, GIB::Cross) || ArcadeHeld(p, GIB::Circle) ||
-				ArcadeHeld(p, GIB::Square) || ArcadeHeld(p, GIB::Triangle));
-			ACJV::SetDrumHit(p1 ? 5 : 1, ArcadeHeld(p, GIB::L1) || ArcadeHeld(p, GIB::L2));
-			ACJV::SetDrumHit(p1 ? 4 : 6, ArcadeHeld(p, GIB::R1) || ArcadeHeld(p, GIB::R2));
-			if (ArcadeHeld(p, GIB::Start))
-				bits |= JVS_BTN_START;
-		}
+        case JVS_MODE::DRUM: {
+            // 1P: Don left/right on channels 0/3, Ka left/right on 5/4. 2P: 2/7 and 1/6 (ACJV_Inputs.h).
+            const bool p1 = (player == 0);
+            ACJV::SetDrumHitMask(p1 ? 0 : 2,
+                                 (ArcadeHeld(p, GIB::DPadUp) ? 1u : 0u) |
+                                 (ArcadeHeld(p, GIB::DPadDown) ? 2u : 0u) |
+                                 (ArcadeHeld(p, GIB::DPadLeft) ? 4u : 0u) |
+                                 (ArcadeHeld(p, GIB::DPadRight) ? 8u : 0u));
+            ACJV::SetDrumHitMask(p1 ? 3 : 7,
+                                 (ArcadeHeld(p, GIB::Cross) ? 1u : 0u) |
+                                 (ArcadeHeld(p, GIB::Circle) ? 2u : 0u) |
+                                 (ArcadeHeld(p, GIB::Square) ? 4u : 0u) |
+                                 (ArcadeHeld(p, GIB::Triangle) ? 8u : 0u));
+            ACJV::SetDrumHitMask(p1 ? 5 : 1,
+                                 (ArcadeHeld(p, GIB::L1) ? 1u : 0u) |
+                                 (ArcadeHeld(p, GIB::L2) ? 2u : 0u));
+            ACJV::SetDrumHitMask(p1 ? 4 : 6,
+                                 (ArcadeHeld(p, GIB::R1) ? 1u : 0u) |
+                                 (ArcadeHeld(p, GIB::R2) ? 2u : 0u));
+            if (ArcadeHeld(p, GIB::Start))
+                bits |= JVS_BTN_START;
+        }
 		break;
 
 		default: // fighting, standard, touch panel and unknown games

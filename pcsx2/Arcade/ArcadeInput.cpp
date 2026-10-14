@@ -463,10 +463,10 @@ namespace
 			{
 				// 1P: Don left/right on channels 0/3, Ka left/right on 5/4. 2P: 2/7 and 1/6 (ACJV_Inputs.h).
 				const bool p1 = (player == 0);
-				ACJV::SetDrumHit(p1 ? 0 : 2, held(GIB::DPadUp) || held(GIB::DPadDown) || held(GIB::DPadLeft) || held(GIB::DPadRight));
-				ACJV::SetDrumHit(p1 ? 3 : 7, held(GIB::Cross) || held(GIB::Circle) || held(GIB::Square) || held(GIB::Triangle));
-				ACJV::SetDrumHit(p1 ? 5 : 1, held(GIB::L1) || held(GIB::L2));
-				ACJV::SetDrumHit(p1 ? 4 : 6, held(GIB::R1) || held(GIB::R2));
+				ACJV::SetDrumHitMask(p1 ? 0 : 2, (held(GIB::DPadUp) ? 1u : 0u) | (held(GIB::DPadDown) ? 2u : 0u) | (held(GIB::DPadLeft) ? 4u : 0u) | (held(GIB::DPadRight) ? 8u : 0u));
+				ACJV::SetDrumHitMask(p1 ? 3 : 7, (held(GIB::Cross) ? 1u : 0u) | (held(GIB::Circle) ? 2u : 0u) | (held(GIB::Square) ? 4u : 0u) | (held(GIB::Triangle) ? 8u : 0u));
+				ACJV::SetDrumHitMask(p1 ? 5 : 1, (held(GIB::L1) ? 1u : 0u) | (held(GIB::L2) ? 2u : 0u));
+				ACJV::SetDrumHitMask(p1 ? 4 : 6, (held(GIB::R1) ? 1u : 0u) | (held(GIB::R2) ? 2u : 0u));
 				if (held(GIB::Start))
 					bits |= JVS_BTN_START;
 			}
