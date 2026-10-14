@@ -41,6 +41,13 @@ val armsx2MarchExtra = providers.gradleProperty("armsx2.marchExtra").orElse("")
 // interpreter bisect into the EE recompiler. Never set for a shipped build.
 val armsx2RecTestHooks = providers.gradleProperty("armsx2.recTestHooks").orElse("false")
 val armsx2ApplicationId = providers.gradleProperty("armsx2.applicationId").orElse("com.armsx2")
+val armsx2UpstreamVersion: String = runCatching {
+    providers.exec {
+        commandLine("git", "describe", "--tags", "--abbrev=0", "--match", "[0-9]*")
+        workingDir = rootProject.projectDir
+    }.standardOutput.asText.get().trim()
+}.getOrDefault("").ifEmpty { "2.6.1" }
+val armsx2TaikoRev = providers.gradleProperty("armsx2.taikoRev").orElse("taiko1.0")
 // Distribution channel, baked into BuildConfig so the app knows which release stream it belongs to
 // without guessing from the version string. "nightly" builds ship a distinct applicationId and
 // label (see ci-nightly-dualcore.sh) so they install alongside the stable app instead of replacing
@@ -114,7 +121,8 @@ android {
         minSdk = armsx2MinSdk.get().toInt()
         targetSdk = 37
         versionCode = providers.gradleProperty("armsx2.versionCode").orNull?.toInt() ?: 1088
-        versionName = providers.gradleProperty("armsx2.versionName").orNull ?: "2.6.1"
+        versionName = providers.gradleProperty("armsx2.versionName").orNull
+			?: "$armsx2UpstreamVersion+${armsx2TaikoRev.get()}"
         // Which release stream this APK came from: "stable" or "nightly". Read by the in-app
         // updater instead of inferring it from versionCode magnitude.
         buildConfigField("String", "CHANNEL", "\"${armsx2Channel.get()}\"")
@@ -255,7 +263,7 @@ android {
             // In-app GitHub-release updater. Github flavor only — Play forbids self-updating,
             // so the real updater + REQUEST_INSTALL_PACKAGES live in src/github and this stays
             // false for play (which uses the src/play no-op stub).
-            buildConfigField("boolean", "IN_APP_UPDATER", "true")
+            buildConfigField("boolean", "IN_APP_UPDATER", "false")
             // LSFG frame generation. Github flavor only, for two independent reasons: the
             // upstream project's consumer app is licensed "No Play Store", and the feature
             // only works when the user supplies their own Lossless.dll, which is not a shape
