@@ -1438,6 +1438,13 @@ object TouchControls {
         activeLayout.value = current.copy(buttons = newButtons)
     }
 
+    /** Editor size bounds (dp) for a widget. Every widget is a square tuned to a thumb, so it is
+     *  clamped to a sane range — except the Taiko drum, which is meant to be scaled to fill the
+     *  whole play area, so its ceiling is effectively unlimited. Shared by the editor's pinch +
+     *  size slider and the JSON reader, so a drum saved large survives a reload. */
+    fun minSizeDp(id: TouchButtonId): Float = if (id == TouchButtonId.TATACON) 24f else 28f
+    fun maxSizeDp(id: TouchButtonId): Float = if (id == TouchButtonId.TATACON) 4000f else 220f
+
     /** Latched off the touch controls when a controller key/axis fires.
      *  Only in "Auto" mode (11) — when an auto-hide timeout is set (1..10) the
      *  timer owns hiding, and "Never" (0) is already hidden. Idempotent.
@@ -1539,9 +1546,16 @@ enum class TouchButtonId(val label: String, val keycode: Int, val kind: Kind) {
     GUN_C("Gun C", 0, Kind.GUN),
     GUN_START("Gun Start", 0, Kind.GUN),
     GUN_SELECT("Gun Sel", 0, Kind.GUN),
-    GUN_CAL("Gun Cal", 0, Kind.GUN);
+    GUN_CAL("Gun Cal", 0, Kind.GUN),
 
-    enum class Kind { FACE, SHOULDER, MENU, DPAD, STICK, PAUSE, PRESSURE, FASTFORWARD, MACRO, STATEACTION, ANALOGEXTRA, GUN }
+    // The Taiko drum (Tatacon). One widget that fires whichever button a finger is on: the head's
+    // four quadrants — top-left up, bottom-left left, top-right ○, bottom-right × — or the rim's
+    // left / right halves (L1 / R1). Several fingers each hold their own zone at once, which is what
+    // a drum roll needs. Carries no keycode of its own (the zones choose it); rendered by
+    // TataconWidget. Shipped OPT-IN and free-resizable — it is meant to be scaled to the drum area.
+    TATACON("Drum", 0, Kind.TATACON);
+
+    enum class Kind { FACE, SHOULDER, MENU, DPAD, STICK, PAUSE, PRESSURE, FASTFORWARD, MACRO, STATEACTION, ANALOGEXTRA, GUN, TATACON }
 }
 
 /** Position + size for a single widget. xFrac / yFrac are anchor-point
@@ -1579,9 +1593,10 @@ data class TouchButtonCfg(
             val id = runCatching { TouchButtonId.valueOf(idName) }.getOrNull() ?: return null
             return TouchButtonCfg(
                 id = id,
-                xFrac = json.optDouble("x", 0.5).toFloat().coerceIn(0f, 1f),
-                yFrac = json.optDouble("y", 0.5).toFloat().coerceIn(0f, 1f),
-                sizeDp = json.optDouble("size", 64.0).toFloat().coerceIn(28f, 220f),
+                xFrac = json.optDouble("x", 0.5).toFloat().coerceIn(-8f, 9f),
+                yFrac = json.optDouble("y", 0.5).toFloat().coerceIn(-8f, 9f),
+                sizeDp = json.optDouble("size", 64.0).toFloat()
+                    .coerceIn(TouchControls.minSizeDp(id), TouchControls.maxSizeDp(id)),
                 enabled = json.optBoolean("on", true),
                 tapToHold = json.optBoolean("hold", false),
                 turbo = json.optInt("turbo", 0).coerceIn(0, TouchControls.MACRO_FREQ_MAX),
@@ -1762,6 +1777,9 @@ data class TouchLayout(val buttons: List<TouchButtonCfg>) {
                 // clear of the action. Hold it, then press a face/shoulder/d-pad
                 // button for a ~50% (soft) press. Movable in overlay edit mode.
                 TouchButtonCfg(TouchButtonId.PRESSURE, 0.10f, 0.78f, 44f, enabled = false),
+                // Taiko drum — OPT-IN (disabled). Free-resizable (no 28..220 clamp), so it parks
+                // small in the middle until the player drags it out and scales it up to their drum.
+                TouchButtonCfg(TouchButtonId.TATACON, 0.50f, 0.66f, 260f, enabled = false),
             ),
         )
     }

@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -35,6 +36,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -48,9 +50,12 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.input.pointer.PointerInputChange
@@ -65,6 +70,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import android.content.res.Configuration
+import android.view.KeyEvent
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -410,7 +416,13 @@ fun TouchControlsOverlay() {
                 layout = layout, widthPx = widthPx, heightPx = heightPx, faceMulti = faceMulti, gunAttached = gunAttached,
             )
         }
-        for (cfg in layout.buttons) {
+        // The drum's (mostly transparent) square can be scaled to cover the whole screen, so it must
+        // sit at the BOTTOM of the z-order — drawn first, so every other control is above it and
+        // keeps winning the touches on its own rect. Sorted stably, so the rest keep their order.
+        val orderedButtons = if (layout.buttons.any { it.id == TouchButtonId.TATACON })
+            layout.buttons.sortedBy { if (it.id == TouchButtonId.TATACON) 0 else 1 }
+        else layout.buttons
+        for (cfg in orderedButtons) {
             if (!cfg.enabled && !edit) continue
             // With full-half sticks on, the invisible half-screen layer owns the analogs — hide the
             // normal L/R stick widgets during play (edit mode still shows them so they stay editable).
@@ -433,8 +445,9 @@ fun TouchControlsOverlay() {
             // snapped on finger-up in editGestures.
             val snapping = edit && TouchControls.gridSnap.value
             val gridPx = if (snapping) widthPx / GRID_COLS else 0f
-            val xFrac = if (snapping) snapFracToGrid(cfg.xFrac, widthPx, gridPx) else cfg.xFrac
-            val yFrac = if (snapping) snapFracToGrid(cfg.yFrac, heightPx, gridPx) else cfg.yFrac
+            val sizePx = with(density) { size.toPx() }
+            val xFrac = if (snapping) snapFracToGrid(cfg.xFrac, widthPx, gridPx, sizePx) else cfg.xFrac
+            val yFrac = if (snapping) snapFracToGrid(cfg.yFrac, heightPx, gridPx, sizePx) else cfg.yFrac
             val cx = w * xFrac
             val cy = h * yFrac
             val left = cx - size / 2
@@ -442,7 +455,12 @@ fun TouchControlsOverlay() {
             Box(
                 modifier = Modifier
                     .offset(x = left, y = top)
-                    .size(size)
+                    // requiredSize, not size: `size` is coerced down to the incoming (screen)
+                    // constraints, so a widget scaled past the screen would shrink to screen-size
+                    // while its offset still subtracted the full size/2 — the art slid left/up off
+                    // the screen and no drag could bring it back. requiredSize keeps the square at
+                    // exactly sizeDp, so it grows symmetrically about its centre (the drum).
+                    .requiredSize(size)
                     .alpha(if (edit && !cfg.enabled) 0.4f else 1f),
             ) {
                 when (cfg.id.kind) {
@@ -459,6 +477,24 @@ fun TouchControlsOverlay() {
                     TouchButtonId.Kind.STATEACTION -> StateActionWidget(cfg, edit)
                     TouchButtonId.Kind.ANALOGEXTRA -> AnalogExtraWidget(cfg, edit)
                     TouchButtonId.Kind.GUN -> GunButtonWidget(cfg, edit)
+                    TouchButtonId.Kind.TATACON -> {
+                        // Rectangles (relative to the drum's centre, px) the drum's rim must yield
+                        // to — PPSSPP's "pointer already claimed by another button": a finger down
+                        // on an overlaid control belongs to that control, so the drum never fires
+                        // L1/R1 underneath it. Squares, matching how the glide layer carves out
+                        // foreign widgets; the disabled pause is hidden-but-tappable, so included.
+                        val density = LocalDensity.current
+                        val blockers = layout.buttons.filter {
+                            it.id != TouchButtonId.TATACON &&
+                                ((it.enabled && extraShown(it, gunAttached)) || it.id == TouchButtonId.PAUSE)
+                        }.map { o ->
+                            val s = with(density) { o.sizeDp.dp.toPx() }
+                            val relCx = widthPx * o.xFrac - widthPx * cfg.xFrac
+                            val relCy = heightPx * o.yFrac - heightPx * cfg.yFrac
+                            Rect(relCx - s / 2f, relCy - s / 2f, relCx + s / 2f, relCy + s / 2f)
+                        }
+                        TataconWidget(cfg, edit, blockers)
+                    }
 	                    else -> ButtonWidget(
 	                        cfg = cfg,
 	                        edit = edit,
@@ -650,6 +686,7 @@ private fun drawableFor(id: TouchButtonId, pressed: Boolean): Int = when (id) {
     TouchButtonId.MACRO1, TouchButtonId.MACRO2, TouchButtonId.MACRO3, TouchButtonId.MACRO4,
     TouchButtonId.SAVE_STATE, TouchButtonId.LOAD_STATE, TouchButtonId.SCREENSHOT,
     TouchButtonId.ANALOG_EXTRA,
+    TouchButtonId.TATACON,
     TouchButtonId.GUN_A, TouchButtonId.GUN_B, TouchButtonId.GUN_C,
     TouchButtonId.GUN_START, TouchButtonId.GUN_SELECT, TouchButtonId.GUN_CAL -> R.drawable.pad_cross
 }
@@ -754,6 +791,11 @@ private fun UnifiedTouchLayer(
     // dead spot for everything this layer drives, the D-pad included (#796).
     val foreignRects = layout.buttons.filter { cfg ->
         cfg.enabled && extraShown(cfg, gunAttached) && cfg.id.kind != TouchButtonId.Kind.DPAD &&
+            // The drum is deliberately NOT a foreign carve-out: its square can cover the whole
+            // screen, which would make this layer stand down everywhere and kill every button. The
+            // drum instead yields to those buttons itself (TataconWidget's blocker rects), so both
+            // can share the screen — the button wins where it sits, the rim owns the rest.
+            cfg.id.kind != TouchButtonId.Kind.TATACON &&
             (!isUnifiedKind(cfg.id.kind) || cfg.tapToHold)
     }
 
@@ -1639,6 +1681,229 @@ private fun releaseDpad(state: DpadState) {
 }
 
 /* -------------------------------------------------------------------- */
+/*  Taiko drum widget — one disc, four head buttons + two rim triggers   */
+/* -------------------------------------------------------------------- */
+
+/*  The Tatacon (太鼓) plays the way a real drum controller does: the head is split into four
+ *  quadrants, each firing a button, and the rim's left / right halves stand in for L1 / R1. A finger
+ *  may slide between zones (the code follows) and several fingers each hold their own zone at once,
+ *  which is what a drum roll needs. Modelled on PPSSPP's TataconControl. The widget is free-
+ *  resizable (see TouchControls.maxSizeDp) so it can be scaled to the whole drum area. */
+
+/** The drum art's height / width. drawable/tatacon.png is 800x512, so the head is WIDER than it is
+ *  tall and the hit test (and glow) use an ellipse, exactly as Vita3K's tatacon does. */
+private const val TATACON_ART_H_OVER_W = 512f / 800f
+
+/** The pad code a point ([dx], [dy]) from the widget's centre fires. [half] is half the widget's
+ *  side. Ported from Vita3K's InputOverlayDrawableTatacon.zoneForTouch: the head is an ELLIPSE
+ *  (donRatioX 0.28 of the image half-width, donRatioY 0.37 of the image half-height — the art is
+ *  wider than tall, so its Y half is [TATACON_ART_H_OVER_W] of its X half), and everything else in
+ *  the box is the rim. The head's quadrants are top-left up, bottom-left left, top-right ○,
+ *  bottom-right ×; the whole rim is L1 on the left, R1 on the right. There is intentionally NO
+ *  "off the drum" null: the entire (transparent) square is rim, so once the widget is scaled over
+ *  the screen any touch outside the four head zones is L1/R1 — the point of the transparent margin. */
+private fun tataconCodeAt(dx: Float, dy: Float, half: Float): Int {
+    // Vita3K normalises by the image half-width / half-height. Here [half] is the square's half and
+    // the Fit image is exactly as wide as the square, so the image's Y half is ART_H_OVER_W * half.
+    val nx = dx / half
+    val ny = dy / (half * TATACON_ART_H_OVER_W)
+    val donCheck = (nx / 0.28f) * (nx / 0.28f) + (ny / 0.37f) * (ny / 0.37f)
+    if (donCheck < 1f) {
+        return when {
+            dx < 0f && dy < 0f -> KeyEvent.KEYCODE_DPAD_UP
+            dx < 0f            -> KeyEvent.KEYCODE_DPAD_LEFT
+            dy < 0f            -> KeyEvent.KEYCODE_BUTTON_B // ○
+            else               -> KeyEvent.KEYCODE_BUTTON_A // ×
+        }
+    }
+    return if (dx < 0f) KeyEvent.KEYCODE_BUTTON_L1 else KeyEvent.KEYCODE_BUTTON_R1
+}
+
+/** The four head codes, for the hit glow. */
+private val TATACON_HEAD_CODES = setOf(
+    KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_LEFT,
+    KeyEvent.KEYCODE_BUTTON_B, KeyEvent.KEYCODE_BUTTON_A,
+)
+
+@Composable
+private fun TataconWidget(cfg: TouchButtonCfg, edit: Boolean, blockers: List<Rect>) {
+    val opacity = TouchControls.opacity.floatValue
+    // Codes held right now, one entry per finger — a finger's entry changes as it slides between
+    // zones. It only drives the hit glow; the send diffs what was held against what is now, so a
+    // slide comes out as a release of the old zone and a press of the new one.
+    val held = remember(cfg.id) { mutableStateOf<List<Int>>(emptyList()) }
+
+    val pressMod: Modifier = if (edit) {
+        Modifier.editGestures(cfg)
+    } else {
+        // A sharing node, not a pointerInput: the drum's square usually covers the whole screen and
+        // it is composed ABOVE the full-screen UnifiedTouchLayer, so Compose would hand it every
+        // DOWN and a Select / Start button drawn on the rim (render-only under multi-touch) could
+        // never be pressed. See TataconInputNode.
+        TataconInputElement(TataconParams(held = held, blockers = blockers))
+    }
+
+    // PPSSPP/Vita3K press feedback: while any zone is held the drum brightens a touch (opacity
+    // ×1.15, capped at 1) and drops a little. It is a drawing-only change — the hit zones stay on
+    // the unshifted square, exactly as the original keeps its zones on bounds_ and nudges only the
+    // image. The drop is Vita3K's pressOffsetY = 1% of the IMAGE height (not the square): the Fit
+    // art is ART_H_OVER_W of the square, so it reads as a small vibration rather than a slide.
+    val pressed = held.value.isNotEmpty()
+    val shownAlpha = if (pressed) (opacity * 1.15f).coerceAtMost(1f) else opacity
+    val nudge = if (pressed) (cfg.sizeDp * 0.01f * TATACON_ART_H_OVER_W).dp else 0.dp
+
+    Box(Modifier.fillMaxSize().then(pressMod)) {
+        // The player's own drum art (drawable/tatacon.png), shown whole and centred. Fit scales the
+        // image's width to the widget's side — the geometry the hit zones assume.
+        Image(
+            painter = painterResource(R.drawable.tatacon),
+            contentDescription = cfg.id.label,
+            contentScale = ContentScale.Fit,
+            modifier = Modifier.fillMaxSize().offset(y = nudge).alpha(shownAlpha),
+        )
+        // Head hit glow: Vita3K-style radial gradient — opaque peach at the centre fading to fully
+        // transparent at the edge — shown while any of the four head buttons is down. Drawn as an
+        // OVAL matching the elliptical head (Vita3K draws it as an oval too, taller than wide is
+        // not the case here: the art is wider than tall). Note the colour: PPSSPP/Vita3K write their
+        // constants as an Android ARGB int 0xFFFBAD96, which Compose reads the same way — this peach.
+        androidx.compose.foundation.Canvas(Modifier.fillMaxSize().alpha(opacity)) {
+            if (held.value.any { it in TATACON_HEAD_CODES }) {
+                val c = Offset(size.width / 2f, size.height / 2f)
+                val half = size.minDimension / 2f
+                // Vita3K: glowWidth = halfWidth*0.46*1.1, glowHeight = halfHeight*0.60*1.1, gradient
+                // radius = glowWidth/2. halfWidth here is the square's half, halfHeight its *art*.
+                val gw = half * 0.46f * 1.1f
+                val gh = half * TATACON_ART_H_OVER_W * 0.60f * 1.1f
+                val r = gw * 0.5f
+                drawOval(
+                    brush = Brush.radialGradient(
+                        colors = listOf(Color(0xFFFBAD96), Color(0x00FBAD96)),
+                        center = c,
+                        radius = r,
+                        tileMode = TileMode.Clamp,
+                    ),
+                    topLeft = Offset(c.x - gw / 2f, c.y - gh / 2f),
+                    size = Size(gw, gh),
+                )
+            }
+        }
+        if (edit) EditAdornment(cfg.id)
+    }
+}
+
+/** Parameters for [TataconInputNode]: the widget's glow state and the rects (relative to the
+ *  drum's centre, in px) the rim must yield to. */
+private data class TataconParams(
+    val held: MutableState<List<Int>>,
+    val blockers: List<Rect>,
+)
+
+private class TataconInputElement(val params: TataconParams) : ModifierNodeElement<TataconInputNode>() {
+    override fun create() = TataconInputNode(params)
+    override fun update(node: TataconInputNode) = node.update(params)
+    override fun equals(other: Any?) = other is TataconInputElement && other.params == params
+    override fun hashCode() = params.hashCode()
+}
+
+/**
+ * Touch handling for the drum as a node rather than a `pointerInput`, so it can share pointer input
+ * with its siblings ([sharePointerInputWithSiblings]).
+ *
+ * The drum's square is usually scaled to cover the whole screen and it is composed ABOVE the
+ * full-screen [UnifiedTouchLayer]. Compose gives a touch to only ONE of two overlapping siblings,
+ * so without sharing the drum swallowed every DOWN — a Select / Start / Menu button drawn over the
+ * rim is render-only while multi-touch is on (its own node is absent), so it never saw a press and
+ * the rim fired L1/R1 instead. Sharing lets the layers under the drum see the event too, and the
+ * Initial pass lets the drum decide ownership first: a finger on an overlaid control's rect is left
+ * to that control (PPSSPP's IsPointerUsed — the covering key wins), everything else in the square
+ * is a head quadrant or the rim. A rim finger is consumed so no layer under the drum also acts on
+ * it; a finger left to an overlaid control is never consumed, so it still reaches that control /
+ * the button layer below.
+ */
+private class TataconInputNode(private var params: TataconParams) : Modifier.Node(), PointerInputModifierNode {
+    private val zones = HashMap<PointerId, Int>()
+    private var holding = false
+
+    fun update(next: TataconParams) {
+        if (next == params) return
+        params = next
+    }
+
+    override fun sharePointerInputWithSiblings() = true
+
+    override fun onPointerEvent(pointerEvent: PointerEvent, pass: PointerEventPass, bounds: IntSize) {
+        // The Initial pass is our only one, and it runs top-down: as the drum is above the other
+        // full-screen layers, we look at every finger before they do.
+        if (pass != PointerEventPass.Initial) return
+        val half = min(bounds.width, bounds.height) / 2f
+        if (half <= 0f) return
+        val cx = bounds.width / 2f
+        val cy = bounds.height / 2f
+        var changed = false
+        for (change in pointerEvent.changes) {
+            val dx = change.position.x - cx
+            val dy = change.position.y - cy
+            // Not the drum's if the finger lifted, a widget above already claimed it (isConsumed),
+            // or it landed on an overlaid control's rect — that control wins and the rim stays void
+            // underneath it. Either way, release any zone it held.
+            if (!change.pressed || change.isConsumed || inBlocker(dx, dy)) {
+                if (zones.remove(change.id) != null) changed = true
+                continue
+            }
+            val code = tataconCodeAt(dx, dy, half)
+            if (zones[change.id] != code) {
+                zones[change.id] = code
+                changed = true
+            }
+            // Ours: nothing under this layer may act on this finger (a stick half, the gesture
+            // layer). A finger left to an overlaid control was never consumed above, so it still
+            // reaches that control / the button layer below.
+            change.consume()
+        }
+        if (changed) flush()
+        if (!holding && zones.isNotEmpty()) {
+            holding = true
+            TouchControls.beginTouchHold()
+        } else if (holding && zones.isEmpty()) {
+            holding = false
+            TouchControls.endTouchHold()
+        }
+    }
+
+    private fun inBlocker(dx: Float, dy: Float): Boolean = params.blockers.any {
+        dx >= it.left && dx <= it.right && dy >= it.top && dy <= it.bottom
+    }
+
+    private fun flush() {
+        val now = zones.values.toList()
+        val prev = params.held.value
+        val nowCount = now.groupingBy { it }.eachCount()
+        val prevCount = prev.groupingBy { it }.eachCount()
+        for ((code, n) in nowCount) if ((prevCount[code] ?: 0) < n) sendDigital(code, true)
+        for ((code, n) in prevCount) if ((nowCount[code] ?: 0) < n) sendDigital(code, false)
+        params.held.value = now
+    }
+
+    // Removed mid-press (the controls hiding, the pause menu): let go of every zone still down.
+    override fun onCancelPointerInput() = releaseAll()
+
+    override fun onDetach() = releaseAll()
+
+    private fun releaseAll() {
+        if (holding) {
+            holding = false
+            TouchControls.endTouchHold()
+        }
+        if (zones.isNotEmpty()) {
+            zones.clear()
+            val prev = params.held.value.distinct()
+            params.held.value = emptyList()
+            prev.forEach { sendDigital(it, false) }
+        }
+    }
+}
+
+/* -------------------------------------------------------------------- */
 /*  Analog stick widget                                                  */
 /* -------------------------------------------------------------------- */
 
@@ -2321,9 +2586,10 @@ private fun Modifier.editGestures(cfg: TouchButtonCfg): Modifier =
                 if (released && TouchControls.gridSnap.value && overlay != null) {
                     val gridPx = overlay.widthPx / GRID_COLS
                     TouchControls.updateButton(cfg.id) { c ->
+                        val sizePx = c.sizeDp * overlay.density
                         c.copy(
-                            xFrac = snapFracToGrid(c.xFrac, overlay.widthPx, gridPx),
-                            yFrac = snapFracToGrid(c.yFrac, overlay.heightPx, gridPx),
+                            xFrac = snapFracToGrid(c.xFrac, overlay.widthPx, gridPx, sizePx),
+                            yFrac = snapFracToGrid(c.yFrac, overlay.heightPx, gridPx, sizePx),
                         )
                     }
                 }
@@ -2332,10 +2598,24 @@ private fun Modifier.editGestures(cfg: TouchButtonCfg): Modifier =
     }.pointerInput(cfg.id) {
         detectTransformGestures(panZoomLock = false) { _, pan, zoom, _ ->
             val overlay = OverlayDims.last ?: return@detectTransformGestures
+            if (overlay.widthPx <= 0f || overlay.heightPx <= 0f) return@detectTransformGestures
             TouchControls.updateButton(cfg.id) { current ->
-                val newX = (current.xFrac + pan.x / overlay.widthPx).coerceIn(0.02f, 0.98f)
-                val newY = (current.yFrac + pan.y / overlay.heightPx).coerceIn(0.02f, 0.98f)
-                val newSize = (current.sizeDp * zoom).coerceIn(28f, 220f)
+                // The drum scales freely (no 28..220 ceiling); everything else stays thumb-sized.
+                val newSize = if (cfg.id == TouchButtonId.TATACON) {
+                    (current.sizeDp * zoom).coerceAtLeast(TouchControls.minSizeDp(cfg.id))
+                } else {
+                    (current.sizeDp * zoom)
+                        .coerceIn(TouchControls.minSizeDp(cfg.id), TouchControls.maxSizeDp(cfg.id))
+                }
+                // Clamp against the NEW size: a widget larger than the screen may have its centre
+                // travel off the edge (see centreFracRange), so a big drum can be parked freely.
+                val sizePx = newSize * overlay.density
+                val rangeX = centreFracRange(overlay.widthPx, sizePx)
+                val rangeY = centreFracRange(overlay.heightPx, sizePx)
+                val newX = (current.xFrac + pan.x / overlay.widthPx)
+                    .coerceIn(rangeX.start, rangeX.endInclusive)
+                val newY = (current.yFrac + pan.y / overlay.heightPx)
+                    .coerceIn(rangeY.start, rangeY.endInclusive)
                 current.copy(xFrac = newX, yFrac = newY, sizeDp = newSize)
             }
         }
@@ -2355,9 +2635,10 @@ private fun snapLayoutToGrid() {
     val current = TouchControls.activeLayout.value
     TouchControls.activeLayout.value = current.copy(
         buttons = current.buttons.map { c ->
+            val sizePx = c.sizeDp * overlay.density
             c.copy(
-                xFrac = snapFracToGrid(c.xFrac, overlay.widthPx, gridPx),
-                yFrac = snapFracToGrid(c.yFrac, overlay.heightPx, gridPx),
+                xFrac = snapFracToGrid(c.xFrac, overlay.widthPx, gridPx, sizePx),
+                yFrac = snapFracToGrid(c.yFrac, overlay.heightPx, gridPx, sizePx),
             )
         },
     )
@@ -2374,13 +2655,33 @@ private object OverlayDims {
  *  pixel pitch so cells are square and a widget's centre anchor lands on a grid cross. */
 private const val GRID_COLS = 24f
 
+/** Fraction of each screen dimension that must keep overlapping a widget, so it can always be
+ *  grabbed even after it has been pushed off an edge. */
+private const val KEEP_ON_SCREEN_FRAC = 0.10f
+
+/** Range a widget's centre fraction may occupy on one axis (its screen dimension in px, its
+ *  rendered side in px).
+ *
+ *  A widget may be pushed off an edge until only [KEEP_ON_SCREEN_FRAC] of the screen dimension
+ *  still overlaps it. For a small button this is nearly the old behaviour (its centre stays
+ *  around 0.03..0.97 once half its own width is allowed back in), but a widget scaled past the
+ *  whole screen — the drum — can now have its centre travel well beyond the edge, so most or all
+ *  of it can be parked off-screen. The old fixed 0.02..0.98 pinned every centre to the screen,
+ *  which capped any widget at half off and made a big drum impossible to place. */
+private fun centreFracRange(screenPx: Float, sizePx: Float): ClosedFloatingPointRange<Float> {
+    if (screenPx <= 0f) return 0.02f..0.98f
+    val half = if (sizePx.isFinite()) (sizePx / (2f * screenPx)).coerceIn(0f, 100f) else 0f
+    return (KEEP_ON_SCREEN_FRAC - half)..(1f - KEEP_ON_SCREEN_FRAC + half)
+}
+
 /** Round a centre-anchor fraction to the nearest grid line. Works in pixel space so both axes
- *  share one square pitch, then converts back to a fraction (clamped to the same 0.02..0.98 the
- *  drag handler uses so a snapped widget can never leave the screen). */
-private fun snapFracToGrid(frac: Float, dimPx: Float, gridPx: Float): Float {
+ *  share one square pitch, then converts back to a fraction (clamped to [centreFracRange] so a
+ *  snapped widget obeys the same off-screen limits as a free drag). */
+private fun snapFracToGrid(frac: Float, dimPx: Float, gridPx: Float, sizePx: Float): Float {
     if (gridPx <= 0f || dimPx <= 0f) return frac
     val snappedPx = (frac * dimPx / gridPx).roundToInt() * gridPx
-    return (snappedPx / dimPx).coerceIn(0.02f, 0.98f)
+    val range = centreFracRange(dimPx, sizePx)
+    return (snappedPx / dimPx).coerceIn(range.start, range.endInclusive)
 }
 
 /* -------------------------------------------------------------------- */
@@ -2639,10 +2940,15 @@ private fun EditToolbar(modifier: Modifier = Modifier) {
                     value = selectedCfg.sizeDp,
                     onValueChange = { newSize ->
                         TouchControls.updateButton(selectedCfg.id) {
-                            it.copy(sizeDp = newSize.coerceIn(28f, 220f))
+                            it.copy(
+                                sizeDp = newSize.coerceIn(
+                                    TouchControls.minSizeDp(selectedCfg.id),
+                                    TouchControls.maxSizeDp(selectedCfg.id),
+                                ),
+                            )
                         }
                     },
-                    valueRange = 28f..220f,
+                    valueRange = TouchControls.minSizeDp(selectedCfg.id)..TouchControls.maxSizeDp(selectedCfg.id),
                     modifier = Modifier
                         .width(240.dp)
                         .height(28.dp),
