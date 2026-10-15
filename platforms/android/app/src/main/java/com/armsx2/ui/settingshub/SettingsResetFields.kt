@@ -37,12 +37,12 @@ internal val SETTINGS_CATEGORY_FIELDS: Map<SettingsCategory, List<String>> = map
     ),
     // RendererTab.kt
     SettingsCategory.Graphics to listOf(
-        "accurateBlendingUnit", "aspectRatio", "casMode", "casSharpness",
+        "accurateBlendingUnit", "portraitAspectRatio", "landscapeAspectRatio", "casMode", "casSharpness",
         "customAspectRatio", "customDriverId", "deinterlaceMode", "displayBilinear", "dumpReplaceableTextures", "fmvAspectRatio",
         "forceMaliFbFetch", "fsrSharpness", "fxaa", "gpuProfile", "gsBackThreadMode", "hardwareDownloadMode",
         "hwAa1", "hwAccurateAlphaTest", "hwMipmap", "hwRov", "loadTextureReplacements",
         "loadTextureReplacementsAsync", "maxAnisotropy", "orientation",
-        "osdShowTextureReplacements", "portraitRenderTop", "landscapeRenderTop", "autoProgressiveScan",
+        "osdShowTextureReplacements", "portraitRenderTop", "portraitRenderYOffset", "landscapeRenderTop", "autoProgressiveScan",
         "affinityMode", "precacheTextureReplacements", "renderer",
         "shadeBoost", "shadeBoostBrightness", "shadeBoostContrast", "shadeBoostGamma",
         "shadeBoostSaturation", "shaderChainEnabled", "shaderChainParams", "shaderChainPreset",

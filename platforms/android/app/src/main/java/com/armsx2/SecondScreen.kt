@@ -2,6 +2,7 @@ package com.armsx2
 
 import android.app.Presentation
 import android.content.Context
+import android.content.res.Configuration
 import android.graphics.Color
 import android.hardware.display.DisplayManager
 import android.os.Bundle
@@ -777,11 +778,18 @@ object SecondScreen {
                 SecondScreenTile.SCREENSHOT ->
                     MainActivityRuntime.instance?.applicationContext?.let { Screenshots.capture(it) }
                 SecondScreenTile.ASPECT -> {
-                    // Cycles the nine display modes the in-game menu offers, through the same
-                    // save path, so it lands in the same scope (per-game when the game has one).
+                    // Cycles the nine display modes the in-game menu offers, through the same save
+                    // path, so it lands in the same scope (per-game when the game has one). The
+                    // mode is split by orientation and the game is on the phone, not this panel
+                    // (whose orientation can differ), so cycle the main screen's.
+                    val portrait = (MainActivityRuntime.instance?.resources?.configuration?.orientation
+                        ?: Configuration.ORIENTATION_LANDSCAPE) == Configuration.ORIENTATION_PORTRAIT
                     val cur = com.armsx2.ui.InGameOverlay.settingsState.value
+                    val out = cur.output
+                    val next = ((if (portrait) out.portraitAspectRatio else out.landscapeAspectRatio) + 1) % 9
                     com.armsx2.ui.InGameOverlay.saveSettings(
-                        cur.copy(output = cur.output.copy(aspectRatio = (cur.output.aspectRatio + 1) % 9)),
+                        cur.copy(output = if (portrait) out.copy(portraitAspectRatio = next)
+                        else out.copy(landscapeAspectRatio = next)),
                     )
                 }
                 SecondScreenTile.SLOT ->
@@ -957,10 +965,15 @@ object SecondScreen {
                     )
                     SecondScreenTile.SLOT ->
                         tileFace(tile.icon, MainActivityRuntime.currentSaveSlot.intValue.toString())
-                    SecondScreenTile.ASPECT -> tileFace(
-                        tile.icon,
-                        aspectLabel(com.armsx2.ui.InGameOverlay.settingsState.value.output.aspectRatio),
-                    )
+                    SecondScreenTile.ASPECT -> {
+                        val portrait = (MainActivityRuntime.instance?.resources?.configuration?.orientation
+                            ?: Configuration.ORIENTATION_LANDSCAPE) == Configuration.ORIENTATION_PORTRAIT
+                        val out = com.armsx2.ui.InGameOverlay.settingsState.value.output
+                        tileFace(
+                            tile.icon,
+                            aspectLabel(if (portrait) out.portraitAspectRatio else out.landscapeAspectRatio),
+                        )
+                    }
                     else -> null
                 }
                 if (text != null && view is TextView) view.text = text

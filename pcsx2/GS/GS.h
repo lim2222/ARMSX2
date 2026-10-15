@@ -123,8 +123,16 @@ void GSSetDisplayAlignment(GSDisplayAlignment alignment);
 void GSSetPortraitRenderTopAlign(bool enabled);
 /// Pixels kept clear at the top of a portrait window (display cutout / camera).
 void GSSetPortraitRenderTopInset(int pixels);
+/// A user Y offset for a PORTRAIT window, in percent of the window height (positive = down), applied
+/// on top of the Top/Centre choice. Lets the player nudge the image clear of the touch controls.
+void GSSetPortraitRenderYOffset(int percent);
 /// Top-align the render in a LANDSCAPE window (foldables / clamshell controllers).
 void GSSetLandscapeRenderTopAlign(bool enabled);
+/// Android: per-orientation display modes. Each takes an AspectRatioType index (0..8), or -1 to
+/// fall back to the active EmuConfig value. Lets portrait and landscape keep separate aspect
+/// ratios (e.g. 4:3 standing upright, 16:9 on its side). Read live per-present.
+void GSSetPortraitAspectRatio(int type);
+void GSSetLandscapeAspectRatio(int type);
 bool GSHasDisplayWindow();
 void GSResizeDisplayWindow(u32 width, u32 height, float scale);
 void GSUpdateDisplayWindow();

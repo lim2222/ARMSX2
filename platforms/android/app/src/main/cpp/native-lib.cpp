@@ -1802,11 +1802,36 @@ Java_kr_co_iefriends_pcsx2_NativeApp_setPortraitRenderTopInset(JNIEnv*, jclass, 
 
 extern "C"
 JNIEXPORT void JNICALL
+Java_kr_co_iefriends_pcsx2_NativeApp_setPortraitRenderYOffset(JNIEnv*, jclass, jint percent) {
+    // A user nudge for a portrait render, in percent of the window height (positive = down), added
+    // on top of the Top/Centre choice. Same GS static shape as the inset above: read live
+    // per-present, safe with or without a running VM. Only affects portrait windows with slack.
+    GSSetPortraitRenderYOffset(static_cast<int>(percent));
+}
+
+extern "C"
+JNIEXPORT void JNICALL
 Java_kr_co_iefriends_pcsx2_NativeApp_setLandscapeRenderTop(JNIEnv*, jclass, jboolean top) {
     // Top-align the render in a LANDSCAPE window instead of vertical-centering. Foldables and
     // clamshell controllers open the screen downward, so a centred image sits too low. Same GS
     // static shape as the portrait flag: read live per-present, safe with or without a VM.
     GSSetLandscapeRenderTopAlign(top == JNI_TRUE);
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_kr_co_iefriends_pcsx2_NativeApp_setPortraitAspectRatio(JNIEnv*, jclass, jint type) {
+    // Display mode for a PORTRAIT window (AspectRatioType index 0..8, -1 = use the active config
+    // value). The GS picks it per present from the window orientation, so no Kotlin-side rotation
+    // plumbing is needed; safe to call with or without a running VM.
+    GSSetPortraitAspectRatio(static_cast<int>(type));
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_kr_co_iefriends_pcsx2_NativeApp_setLandscapeAspectRatio(JNIEnv*, jclass, jint type) {
+    // As above, for a LANDSCAPE window.
+    GSSetLandscapeAspectRatio(static_cast<int>(type));
 }
 
 extern "C"

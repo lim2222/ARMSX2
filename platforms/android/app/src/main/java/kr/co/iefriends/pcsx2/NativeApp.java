@@ -961,10 +961,22 @@ public class NativeApp {
 	/** Top-align the render in a LANDSCAPE window (foldables / clamshell controllers). */
 	public static native void setLandscapeRenderTop(boolean top);
 
+	/** Display mode for a PORTRAIT window: aspect index 0..8, or -1 to leave the active config
+	 *  value. Split out from the single display-mode setting so portrait and landscape can each
+	 *  keep their own ratio. The renderer picks the one matching the window orientation. */
+	public static native void setPortraitAspectRatio(int type);
+
+	/** Display mode for a LANDSCAPE window; same values as {@link #setPortraitAspectRatio}. */
+	public static native void setLandscapeAspectRatio(int type);
+
 	/** Pixels to keep clear at the top of a PORTRAIT render for a punch-hole/notch camera. Taken
 	 *  from the window's display cutout; 0 on devices without one. Only affects portrait
 	 *  top-aligned output. */
 	public static native void setPortraitRenderTopInset(int pixels);
+	/** User nudge for a PORTRAIT render: percent of the window height, positive = down, applied on
+	 *  top of the Portrait Render Position above. Lets the player fine-tune where the game sits
+	 *  (e.g. clear of the on-screen controls). Only affects portrait windows with vertical slack. */
+	public static native void setPortraitRenderYOffset(int percent);
 	/** SPU2 output volume, percent (0..200). Applies live + persists. */
 	public static native void setAudioVolume(int volume);
 	/** Mute/unmute SPU2 output. Applies live + persists. */

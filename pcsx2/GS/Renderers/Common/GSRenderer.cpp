@@ -71,11 +71,22 @@ static bool s_portrait_render_top = true;
 // Zero everywhere else; only consulted on the top-align path, which by definition has spare room
 // below it (that space is what the touch controls occupy).
 static int s_portrait_render_top_inset = 0;
+// Android: an extra user Y offset for a portrait window, as a fraction of the window height
+// (positive = down). Added on top of the Top/Centre choice above, so the player can nudge the
+// image to sit exactly where they want it (e.g. clear of the touch controls). Only used where a
+// portrait render has vertical slack; a render already taller than the window is not shifted, so
+// this can never expose a gap. Set from the Android UI, read live per-present.
+static float s_portrait_render_y_offset = 0.0f;
 // Android landscape: top-align the render instead of vertically centering it. Foldables and
 // clamshell controllers (Backbone and friends) open the screen DOWNWARD, so a centred image sits
 // awkwardly low and the letterbox lands where the hinge/controller is — reported as the one thing
 // keeping those users on another emulator. Default off (centre), so nothing changes unless asked.
 static bool s_landscape_render_top = false;
+// Android: user display modes (AspectRatioType index, -1 = unset) split by window orientation, so a
+// game can hold 4:3 standing upright and 16:9 on its side. -1 leaves the active EmuConfig value
+// standing. Read live per-present; a running FMV aspect override still takes precedence.
+static int s_portrait_aspect_ratio = -1;
+static int s_landscape_aspect_ratio = -1;
 
 // Defined further down alongside the present path. Forward-declared because Merge() needs the
 // frame's on-screen rect to size the RetroArch shader chain, and it runs before them.
@@ -535,9 +546,25 @@ static GSVector4 CalculateDrawDstRect(s32 window_width, s32 window_height, const
 	const float f_width = static_cast<float>(window_width);
 	const float f_height = static_cast<float>(window_height);
 	const float clientAr = f_width / f_height;
+	const bool is_portrait_window_outer = window_height > window_width;
+
+	// Android: the display mode is split by orientation, so pick this window's. -1 means the app has
+	// not set one and the active config value stands. A running FMV swaps CurrentAspectRatio away
+	// from the base to apply its own ratio and restores it afterwards, so only substitute while no
+	// such override is in play — an FMV switch of Off can never be one.
+	AspectRatioType aspect_ratio = EmuConfig.CurrentAspectRatio;
+	{
+		const int orientation_ratio = is_portrait_window_outer ? s_portrait_aspect_ratio : s_landscape_aspect_ratio;
+		if (orientation_ratio >= 0 &&
+			(EmuConfig.GS.FMVAspectRatioSwitch == FMVAspectRatioSwitchType::Off ||
+				EmuConfig.CurrentAspectRatio == EmuConfig.GS.AspectRatio))
+		{
+			aspect_ratio = static_cast<AspectRatioType>(orientation_ratio);
+		}
+	}
 
 	float targetAr = clientAr;
-	if (EmuConfig.CurrentAspectRatio == AspectRatioType::RAuto4_3_3_2)
+	if (aspect_ratio == AspectRatioType::RAuto4_3_3_2)
 	{
 		if (is_progressive)
 			targetAr = 3.0f / 2.0f;
@@ -547,31 +574,31 @@ static GSVector4 CalculateDrawDstRect(s32 window_width, s32 window_height, const
 		if (EmuConfig.CurrentCustomAspectRatio > 0.f)
 			targetAr = EmuConfig.CurrentCustomAspectRatio;
 	}
-	else if (EmuConfig.CurrentAspectRatio == AspectRatioType::R4_3)
+	else if (aspect_ratio == AspectRatioType::R4_3)
 	{
 		targetAr = 4.0f / 3.0f;
 	}
-	else if (EmuConfig.CurrentAspectRatio == AspectRatioType::R16_9)
+	else if (aspect_ratio == AspectRatioType::R16_9)
 	{
 		targetAr = 16.0f / 9.0f;
 	}
-	else if (EmuConfig.CurrentAspectRatio == AspectRatioType::R10_7)
+	else if (aspect_ratio == AspectRatioType::R10_7)
 	{
 		targetAr = 10.0f / 7.0f;
 	}
-	else if (EmuConfig.CurrentAspectRatio == AspectRatioType::R21_9)
+	else if (aspect_ratio == AspectRatioType::R21_9)
 	{
 		targetAr = 21.0f / 9.0f;
 	}
-	else if (EmuConfig.CurrentAspectRatio == AspectRatioType::R20_9)
+	else if (aspect_ratio == AspectRatioType::R20_9)
 	{
 		targetAr = 20.0f / 9.0f;
 	}
-	else if (EmuConfig.CurrentAspectRatio == AspectRatioType::R19_5_9)
+	else if (aspect_ratio == AspectRatioType::R19_5_9)
 	{
 		targetAr = 19.5f / 9.0f;
 	}
-	else if (EmuConfig.CurrentAspectRatio == AspectRatioType::Custom)
+	else if (aspect_ratio == AspectRatioType::Custom)
 	{
 		targetAr = std::clamp(GSConfig.CustomAspectRatio, 0.5f, 5.0f);
 	}
@@ -644,7 +671,6 @@ static GSVector4 CalculateDrawDstRect(s32 window_width, s32 window_height, const
 				break;
 		}
 	}
-	const bool is_portrait_window_outer = window_height > window_width;
 	if (target_height >= f_height)
 	{
 		// The render is TALLER than the window, so the overflow is normally split evenly and the
@@ -685,6 +711,14 @@ static GSVector4 CalculateDrawDstRect(s32 window_width, s32 window_height, const
 					: 0.0f;
 				break;
 		}
+
+		// Android: a user Y offset in a PORTRAIT window, on top of the Top/Centre choice above, so
+		// the image can be nudged to sit exactly where the player wants it (clear of the touch
+		// controls, or just a touch higher/lower). A fraction of the window height, so the same value
+		// reads the same on any panel. Portrait only, and only here: this branch is the one a short,
+		// letterboxed portrait image takes, and it always has slack, so shifting cannot clip it.
+		if (is_portrait_window && s_portrait_render_y_offset != 0.0f)
+			target_y += s_portrait_render_y_offset * f_height;
 	}
 
 	GSVector4 ret(target_x, target_y, target_x + target_width, target_y + target_height);
@@ -1609,9 +1643,27 @@ void GSSetPortraitRenderTopAlign(bool enabled)
 	s_portrait_render_top = enabled;
 }
 
+void GSSetPortraitRenderYOffset(int percent)
+{
+	// Percent of the window height; clamped so a bad value cannot fling the image away entirely.
+	s_portrait_render_y_offset = std::clamp(static_cast<float>(percent) / 100.0f, -1.0f, 1.0f);
+}
+
 void GSSetLandscapeRenderTopAlign(bool enabled)
 {
 	s_landscape_render_top = enabled;
+}
+
+void GSSetPortraitAspectRatio(int type)
+{
+	const int max = static_cast<int>(AspectRatioType::MaxCount);
+	s_portrait_aspect_ratio = (type >= 0 && type < max) ? type : -1;
+}
+
+void GSSetLandscapeAspectRatio(int type)
+{
+	const int max = static_cast<int>(AspectRatioType::MaxCount);
+	s_landscape_aspect_ratio = (type >= 0 && type < max) ? type : -1;
 }
 
 GSTexture* GSRenderer::LookupPaletteSource(u32 CBP, u32 CPSM, u32 CBW, GSVector2i& offset, float* scale, const GSVector2i& size)

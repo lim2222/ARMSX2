@@ -995,23 +995,29 @@ private fun GraphicsPane(state: EmulationMenuUiState, viewModel: EmulationMenuVi
     MenuSwitchRow(str("renderer.precacheTexturePacks.label"), settings.graphics.precacheTextureReplacements, field = "precacheTextureReplacements") {
         viewModel.updateSettings { current -> current.copy(graphics = current.graphics.copy(precacheTextureReplacements = it)) }
     }
-    HorizontalOptions(
-        title = str("renderer.displayMode.label"),
-        options = listOf(
-            0 to str("setup.aspect.stretch"),
-            1 to str("setup.aspect.auto"),
-            2 to "4:3",
-            3 to "16:9",
-            4 to "10:7",
-            5 to "21:9",
-            6 to "20:9",
-            7 to "19.5:9",
-            8 to "Custom",
-        ),
-        selected = settings.output.aspectRatio,
-        onSelect = viewModel::setAspectRatio,
-        field = "aspectRatio",
-    )
+    // Display Mode is split by orientation. From in-game, show and edit the one matching how the
+    // device is currently held, so the picker always reflects what is on screen.
+    run {
+        val isPortrait = androidx.compose.ui.platform.LocalConfiguration.current.orientation ==
+            android.content.res.Configuration.ORIENTATION_PORTRAIT
+        HorizontalOptions(
+            title = str("renderer.displayMode.label"),
+            options = listOf(
+                0 to str("setup.aspect.stretch"),
+                1 to str("setup.aspect.auto"),
+                2 to "4:3",
+                3 to "16:9",
+                4 to "10:7",
+                5 to "21:9",
+                6 to "20:9",
+                7 to "19.5:9",
+                8 to "Custom",
+            ),
+            selected = if (isPortrait) settings.output.portraitAspectRatio else settings.output.landscapeAspectRatio,
+            onSelect = { value -> viewModel.setAspectRatio(value, isPortrait) },
+            field = if (isPortrait) "portraitAspectRatio" else "landscapeAspectRatio",
+        )
+    }
     // Screen orientation from in-game: whether a game plays better in portrait or landscape is
     // found out by trying it, and that meant leaving for All Settings each time. Same values as
     // the Renderer tab's row, and applied straight away the same way.

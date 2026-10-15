@@ -248,20 +248,29 @@ fun RendererTab(state: MutableState<Settings>) {
             }
             SettingsDivider()
             SegmentedRow(
-                label = str("renderer.displayMode.label"),
-                // Adding an option here means widening BOTH clamps: this one and
+                label = str("renderer.portraitDisplayMode.label"),
+                // Adding an option here means widening the clamps too: selectedIndex/labels here and
                 // EmulationMenuViewModel.setAspectRatio. A clamp left at the old maximum does not
                 // fail loudly -- it silently snaps the new choice back to the previous entry.
                 options = listOf("Stretch", "Auto", "4:3", "16:9", "10:7", "21:9", "20:9", "19.5:9", "Custom"),
-                selectedIndex = s.output.aspectRatio.coerceIn(0, 8),
-                description = str("renderer.displayMode.description"),
-                onChange = { apply(s.copy(output = s.output.copy(aspectRatio = it))) },
-                field = "aspectRatio",
+                selectedIndex = s.output.portraitAspectRatio.coerceIn(0, 8),
+                description = str("renderer.portraitDisplayMode.description"),
+                onChange = { apply(s.copy(output = s.output.copy(portraitAspectRatio = it))) },
+                field = "portraitAspectRatio",
+            )
+            SettingsDivider()
+            SegmentedRow(
+                label = str("renderer.landscapeDisplayMode.label"),
+                options = listOf("Stretch", "Auto", "4:3", "16:9", "10:7", "21:9", "20:9", "19.5:9", "Custom"),
+                selectedIndex = s.output.landscapeAspectRatio.coerceIn(0, 8),
+                description = str("renderer.landscapeDisplayMode.description"),
+                onChange = { apply(s.copy(output = s.output.copy(landscapeAspectRatio = it))) },
+                field = "landscapeAspectRatio",
             )
             // Only meaningful for Custom (8), so it stays hidden otherwise rather than sitting there
-            // inert. Shown when EITHER the main aspect or the FMV override is Custom, since the FMV
+            // inert. Shown when EITHER display mode or the FMV override is Custom, since the FMV
             // path reads the same ratio.
-            if (s.output.aspectRatio == 8 || s.output.fmvAspectRatio == 8) {
+            if (s.output.portraitAspectRatio == 8 || s.output.landscapeAspectRatio == 8 || s.output.fmvAspectRatio == 8) {
                 IntSliderRow(
                     label = str("renderer.customAspect.label"),
                     // Presented in hundredths: the slider is integral, the setting is a float.
@@ -321,6 +330,22 @@ fun RendererTab(state: MutableState<Settings>) {
                 description = str("renderer.portraitPosition.description"),
                 onChange = { apply(s.copy(output = s.output.copy(portraitRenderTop = it == 0))) },
                 field = "portraitRenderTop",
+            )
+            SettingsDivider()
+            // Fine-tune where the portrait render sits, on top of the Top/Centre choice above.
+            // Positive moves the image down, negative up; 0 leaves the choice above untouched. A
+            // percent of the screen height, so it reads the same on any panel. Live via
+            // NativeApp.setPortraitRenderYOffset (through applyTo); only affects portrait windows.
+            IntSliderRow(
+                label = str("renderer.portraitYOffset.label"),
+                value = s.output.portraitRenderYOffset,
+                min = -50,
+                max = 50,
+                description = str("renderer.portraitYOffset.description"),
+                valueFormatter = { v -> if (v > 0) "+$v%" else "$v%" },
+                onReset = { apply(s.copy(output = s.output.copy(portraitRenderYOffset = 0))) },
+                onChange = { apply(s.copy(output = s.output.copy(portraitRenderYOffset = it))) },
+                field = "portraitRenderYOffset",
             )
             SettingsDivider()
             // Where the render sits in a LANDSCAPE window. Center is the default; Top suits

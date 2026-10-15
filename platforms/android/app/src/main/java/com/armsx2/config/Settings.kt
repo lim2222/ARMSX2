@@ -527,15 +527,20 @@ data class OutputSettings(
     /** EmuCore/GS/extrathreads_height — SW-renderer tile height per thread (0-8). PCSX2 default 4. Restart to apply. */
     val swThreadsHeight: Int = 4,
 
-    /** EmuCore/GS/AspectRatio:
+    /** EmuCore/GS/AspectRatio, used for a PORTRAIT window:
      *  0 Stretch · 1 Auto 4:3/3:2 · 2 4:3 · 3 16:9 · 4 10:7 · 5 21:9 · 6 20:9 · 7 19.5:9 · 8 Custom.
-     *  Indices are persisted, so append new ratios — never insert. */
-    val aspectRatio: Int = 1,
+     *  Indices are persisted, so append new ratios — never insert. The display mode is split by
+     *  orientation, so this only governs an upright window; [landscapeAspectRatio] governs a wide
+     *  one. Applied live via NativeApp.setPortraitAspectRatio. */
+    val portraitAspectRatio: Int = 1,
+    /** EmuCore/GS/AspectRatio, used for a LANDSCAPE window. Same values as
+     *  [portraitAspectRatio]; applied live via NativeApp.setLandscapeAspectRatio. */
+    val landscapeAspectRatio: Int = 1,
     /** EmuCore/GS/FMVAspectRatioSwitch — aspect ratio used ONLY while an FMV/MPEG is
-     *  playing (restores [aspectRatio] when it ends). 0 Off (no override) · 1 Auto
+     *  playing (restores the display mode when it ends). 0 Off (no override) · 1 Auto
      *  4:3/3:2 · 2 4:3 · 3 16:9 · 4 10:7 · 5 21:9 · 6 20:9 · 7 19.5:9 · 8 Custom. Default Off. */
     val fmvAspectRatio: Int = 0,
-    /** EmuCore/GS/CustomAspectRatio — width/height used when [aspectRatio] is 8 (Custom).
+    /** EmuCore/GS/CustomAspectRatio — width/height used when a display mode is 8 (Custom).
      *  A ratio rather than separate W/H so any value is expressible; clamped 0.5..5.0 natively. */
     val customAspectRatio: Float = 16f / 9f,
     /** Host graphics API: "auto" / "opengl" / "vulkan" / "software". Applied via
@@ -560,6 +565,11 @@ data class OutputSettings(
      *  centering (false), so the bottom is free for touch controls. Applied live via
      *  NativeApp.setPortraitRenderTop; only affects a portrait window. */
     val portraitRenderTop: Boolean = true,
+    /** A user Y nudge for a PORTRAIT render, in percent of the window height (positive = down),
+     *  applied on top of [portraitRenderTop] so the image can be placed exactly where the player
+     *  wants it (e.g. clear of the on-screen controls). Applied live via
+     *  NativeApp.setPortraitRenderYOffset; only affects a portrait window with vertical slack. */
+    val portraitRenderYOffset: Int = 0,
     /** In LANDSCAPE, top-align the render instead of vertical-centering (default). Foldables and
      *  clamshell controllers (Backbone-style) open the screen downward, so a centred image sits
      *  too low. Applied live via NativeApp.setLandscapeRenderTop; only affects a landscape window. */
@@ -968,6 +978,7 @@ data class Settings(
         // GS-thread global, applied live; no persisted EmuCore key needed.
         if (emitSink == null) NativeApp.setFrameSkip(frameLimit.frameSkip.coerceIn(0, 5))
         if (emitSink == null) NativeApp.setPortraitRenderTop(output.portraitRenderTop)
+        if (emitSink == null) NativeApp.setPortraitRenderYOffset(output.portraitRenderYOffset.coerceIn(-100, 100))
         if (emitSink == null) NativeApp.setLandscapeRenderTop(output.landscapeRenderTop)
         // Audio (SPU2). Volume/mute are live native setters; the rest are written
         // to the base layer and applied on commit (SPU2 stream reconfigure).
@@ -1108,10 +1119,11 @@ data class Settings(
         if (emitSink != null) return
         // Live convenience pokes. Harmless when the GS is closed; commitSettings()
         // below performs the authoritative apply for a cold start / restart.
-        // 0..5 — the upper bound is the LAST aspect index, so adding a ratio means widening this
-        // too. Left at 4 it silently sent 10:7 to the core no matter what the picker showed, which
-        // is the worst version of this bug: the UI looks correct and nothing happens.
-        NativeApp.setAspectRatio(output.aspectRatio.coerceIn(0, 8))
+        // Display mode is split by orientation. Push both; the renderer picks the one matching the
+        // window it is drawing. (No setAspectRatio: the per-orientation statics are authoritative,
+        // and the base value written to the INI by writeGsToNative is only a fallback.)
+        NativeApp.setPortraitAspectRatio(output.portraitAspectRatio.coerceIn(0, 8))
+        NativeApp.setLandscapeAspectRatio(output.landscapeAspectRatio.coerceIn(0, 8))
         NativeApp.setFmvAspectRatio(output.fmvAspectRatio.coerceIn(0, 8))
         NativeApp.renderTvShader(graphics.tvShader.coerceIn(0, 7))
         NativeApp.renderShadeBoost(
@@ -1387,7 +1399,9 @@ data class Settings(
                 upscaleFloat = floatAt("EmuCore/GS/upscale_multiplier") ?: this.output.upscaleFloat,
                 // ---- EmuCore/GS (writeGsToNative). Aspect/FMV/gpuProfile stored as names. ----
                 customAspectRatio = floatAt("EmuCore/GS/CustomAspectRatio") ?: this.output.customAspectRatio,
-                aspectRatio = when (strAt("EmuCore/GS/AspectRatio")) {
+                // The INI carries one AspectRatio; seed BOTH orientations from it (the split lives in
+                // the app-side JSON, so an imported INI has to fan out to both).
+                portraitAspectRatio = when (strAt("EmuCore/GS/AspectRatio")) {
                 "Stretch" -> 0
                 "Auto 4:3/3:2" -> 1
                 "4:3" -> 2
@@ -1397,7 +1411,19 @@ data class Settings(
                 "20:9" -> 6
                 "19.5:9" -> 7
                 "Custom" -> 8
-                else -> this.output.aspectRatio
+                else -> this.output.portraitAspectRatio
+            },
+                landscapeAspectRatio = when (strAt("EmuCore/GS/AspectRatio")) {
+                "Stretch" -> 0
+                "Auto 4:3/3:2" -> 1
+                "4:3" -> 2
+                "16:9" -> 3
+                "10:7" -> 4
+                "21:9" -> 5
+                "20:9" -> 6
+                "19.5:9" -> 7
+                "Custom" -> 8
+                else -> this.output.landscapeAspectRatio
             },
                 fmvAspectRatio = when (strAt("EmuCore/GS/FMVAspectRatioSwitch")) {
                 "Off" -> 0
@@ -1616,7 +1642,10 @@ data class Settings(
      *  [applyGsLive] (running VM). Keep the key list in sync with
      *  Pcsx2Config::GSOptions::LoadSave. */
     private fun writeGsToNative() {
-        val aspectRatioName = when (output.aspectRatio.coerceIn(0, 8)) {
+        // The core stores a single AspectRatio; write the landscape pick as the base. The live
+        // per-orientation statics pushed in applyTo are what actually drive the render, so this is
+        // just a sane fallback for a cold start before they land (and for an exported INI).
+        val aspectRatioName = when (output.landscapeAspectRatio.coerceIn(0, 8)) {
             0 -> "Stretch"
             2 -> "4:3"
             3 -> "16:9"
@@ -1953,6 +1982,7 @@ data class Settings(
         put("customDriverId", output.customDriverId)
         put("orientation", output.orientation)
         put("portraitRenderTop", output.portraitRenderTop)
+        put("portraitRenderYOffset", output.portraitRenderYOffset)
         put("landscapeRenderTop", output.landscapeRenderTop)
         put("autoProgressiveScan", output.autoProgressiveScan)
         put("affinityMode", output.affinityMode)
@@ -2037,7 +2067,8 @@ data class Settings(
         put("mipmapSw", output.mipmapSw)
         put("swThreads", output.swThreads)
         put("swThreadsHeight", output.swThreadsHeight)
-        put("aspectRatio", output.aspectRatio)
+        put("portraitAspectRatio", output.portraitAspectRatio)
+        put("landscapeAspectRatio", output.landscapeAspectRatio)
         put("fmvAspectRatio", output.fmvAspectRatio)
         put("customAspectRatio", output.customAspectRatio.toDouble())
         put("deinterlaceMode", output.deinterlaceMode)
@@ -2417,6 +2448,7 @@ data class Settings(
                     customDriverId = json.optString("customDriverId", def.output.customDriverId),
                     orientation = json.optInt("orientation", def.output.orientation),
                     portraitRenderTop = json.optBoolean("portraitRenderTop", def.output.portraitRenderTop),
+                    portraitRenderYOffset = json.optInt("portraitRenderYOffset", def.output.portraitRenderYOffset),
                     landscapeRenderTop = json.optBoolean("landscapeRenderTop", def.output.landscapeRenderTop),
                     autoProgressiveScan = json.optBoolean("autoProgressiveScan", def.output.autoProgressiveScan),
                     affinityMode = json.optInt("affinityMode", def.output.affinityMode),
@@ -2428,7 +2460,9 @@ data class Settings(
                     mipmapSw = json.optBoolean("mipmapSw", def.output.mipmapSw),
                     swThreads = json.optInt("swThreads", def.output.swThreads),
                     swThreadsHeight = json.optInt("swThreadsHeight", def.output.swThreadsHeight),
-                    aspectRatio = json.optInt("aspectRatio", def.output.aspectRatio),
+                    // Legacy key: the old single display mode seeded both orientations when split.
+                    portraitAspectRatio = json.optInt("portraitAspectRatio", json.optInt("aspectRatio", def.output.portraitAspectRatio)),
+                    landscapeAspectRatio = json.optInt("landscapeAspectRatio", json.optInt("aspectRatio", def.output.landscapeAspectRatio)),
                     fmvAspectRatio = json.optInt("fmvAspectRatio", def.output.fmvAspectRatio),
                     customAspectRatio = json.optDouble("customAspectRatio", def.output.customAspectRatio.toDouble()).toFloat(),
                     deinterlaceMode = json.optInt("deinterlaceMode", def.output.deinterlaceMode),
@@ -2579,6 +2613,7 @@ data class Settings(
             if (current.output.customDriverId != base.output.customDriverId) j.put("customDriverId", current.output.customDriverId)
             if (current.output.orientation != base.output.orientation) j.put("orientation", current.output.orientation)
             if (current.output.portraitRenderTop != base.output.portraitRenderTop) j.put("portraitRenderTop", current.output.portraitRenderTop)
+            if (current.output.portraitRenderYOffset != base.output.portraitRenderYOffset) j.put("portraitRenderYOffset", current.output.portraitRenderYOffset)
             if (current.output.landscapeRenderTop != base.output.landscapeRenderTop) j.put("landscapeRenderTop", current.output.landscapeRenderTop)
             if (current.output.autoProgressiveScan != base.output.autoProgressiveScan) j.put("autoProgressiveScan", current.output.autoProgressiveScan)
             if (current.output.affinityMode != base.output.affinityMode) j.put("affinityMode", current.output.affinityMode)
@@ -2661,7 +2696,8 @@ data class Settings(
             if (current.output.mipmapSw             != base.output.mipmapSw)             j.put("mipmapSw", current.output.mipmapSw)
             if (current.output.swThreads            != base.output.swThreads)            j.put("swThreads", current.output.swThreads)
             if (current.output.swThreadsHeight      != base.output.swThreadsHeight)      j.put("swThreadsHeight", current.output.swThreadsHeight)
-            if (current.output.aspectRatio         != base.output.aspectRatio)         j.put("aspectRatio", current.output.aspectRatio)
+            if (current.output.portraitAspectRatio  != base.output.portraitAspectRatio)  j.put("portraitAspectRatio", current.output.portraitAspectRatio)
+            if (current.output.landscapeAspectRatio != base.output.landscapeAspectRatio) j.put("landscapeAspectRatio", current.output.landscapeAspectRatio)
             if (current.output.fmvAspectRatio      != base.output.fmvAspectRatio)      j.put("fmvAspectRatio", current.output.fmvAspectRatio)
             if (current.output.customAspectRatio   != base.output.customAspectRatio)   j.put("customAspectRatio", current.output.customAspectRatio.toDouble())
             if (current.output.deinterlaceMode     != base.output.deinterlaceMode)     j.put("deinterlaceMode", current.output.deinterlaceMode)
@@ -2976,6 +3012,7 @@ data class Settings(
                 customDriverId = if (overrides.has("customDriverId")) overrides.getString("customDriverId") else base.output.customDriverId,
                 orientation = if (overrides.has("orientation")) overrides.getInt("orientation") else base.output.orientation,
                 portraitRenderTop = if (overrides.has("portraitRenderTop")) overrides.getBoolean("portraitRenderTop") else base.output.portraitRenderTop,
+                portraitRenderYOffset = if (overrides.has("portraitRenderYOffset")) overrides.getInt("portraitRenderYOffset") else base.output.portraitRenderYOffset,
                 landscapeRenderTop = if (overrides.has("landscapeRenderTop")) overrides.getBoolean("landscapeRenderTop") else base.output.landscapeRenderTop,
                 autoProgressiveScan = if (overrides.has("autoProgressiveScan")) overrides.getBoolean("autoProgressiveScan") else base.output.autoProgressiveScan,
                 affinityMode = if (overrides.has("affinityMode")) overrides.getInt("affinityMode") else base.output.affinityMode,
@@ -2987,7 +3024,17 @@ data class Settings(
                 mipmapSw = if (overrides.has("mipmapSw")) overrides.getBoolean("mipmapSw") else base.output.mipmapSw,
                 swThreads = if (overrides.has("swThreads")) overrides.getInt("swThreads") else base.output.swThreads,
                 swThreadsHeight = if (overrides.has("swThreadsHeight")) overrides.getInt("swThreadsHeight") else base.output.swThreadsHeight,
-                aspectRatio = if (overrides.has("aspectRatio")) overrides.getInt("aspectRatio") else base.output.aspectRatio,
+                // Legacy "aspectRatio" override (from before the split) seeds both orientations.
+                portraitAspectRatio = when {
+                    overrides.has("portraitAspectRatio") -> overrides.getInt("portraitAspectRatio")
+                    overrides.has("aspectRatio") -> overrides.getInt("aspectRatio")
+                    else -> base.output.portraitAspectRatio
+                },
+                landscapeAspectRatio = when {
+                    overrides.has("landscapeAspectRatio") -> overrides.getInt("landscapeAspectRatio")
+                    overrides.has("aspectRatio") -> overrides.getInt("aspectRatio")
+                    else -> base.output.landscapeAspectRatio
+                },
                 fmvAspectRatio = if (overrides.has("fmvAspectRatio")) overrides.getInt("fmvAspectRatio") else base.output.fmvAspectRatio,
                 customAspectRatio = if (overrides.has("customAspectRatio")) overrides.getDouble("customAspectRatio").toFloat() else base.output.customAspectRatio,
                 deinterlaceMode = if (overrides.has("deinterlaceMode")) overrides.getInt("deinterlaceMode") else base.output.deinterlaceMode,
