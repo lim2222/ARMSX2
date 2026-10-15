@@ -419,8 +419,8 @@ fun TouchControlsOverlay() {
         // The drum's (mostly transparent) square can be scaled to cover the whole screen, so it must
         // sit at the BOTTOM of the z-order — drawn first, so every other control is above it and
         // keeps winning the touches on its own rect. Sorted stably, so the rest keep their order.
-        val orderedButtons = if (layout.buttons.any { it.id == TouchButtonId.TATACON })
-            layout.buttons.sortedBy { if (it.id == TouchButtonId.TATACON) 0 else 1 }
+        val orderedButtons = if (layout.buttons.any { it.id.kind == TouchButtonId.Kind.TATACON })
+            layout.buttons.sortedBy { if (it.id.kind == TouchButtonId.Kind.TATACON) 0 else 1 }
         else layout.buttons
         for (cfg in orderedButtons) {
             if (!cfg.enabled && !edit) continue
@@ -485,7 +485,7 @@ fun TouchControlsOverlay() {
                         // foreign widgets; the disabled pause is hidden-but-tappable, so included.
                         val density = LocalDensity.current
                         val blockers = layout.buttons.filter {
-                            it.id != TouchButtonId.TATACON &&
+                            it.id.kind != TouchButtonId.Kind.TATACON &&
                                 ((it.enabled && extraShown(it, gunAttached)) || it.id == TouchButtonId.PAUSE)
                         }.map { o ->
                             val s = with(density) { o.sizeDp.dp.toPx() }
@@ -686,7 +686,7 @@ private fun drawableFor(id: TouchButtonId, pressed: Boolean): Int = when (id) {
     TouchButtonId.MACRO1, TouchButtonId.MACRO2, TouchButtonId.MACRO3, TouchButtonId.MACRO4,
     TouchButtonId.SAVE_STATE, TouchButtonId.LOAD_STATE, TouchButtonId.SCREENSHOT,
     TouchButtonId.ANALOG_EXTRA,
-    TouchButtonId.TATACON,
+    TouchButtonId.TATACON, TouchButtonId.TATACON_PS2,
     TouchButtonId.GUN_A, TouchButtonId.GUN_B, TouchButtonId.GUN_C,
     TouchButtonId.GUN_START, TouchButtonId.GUN_SELECT, TouchButtonId.GUN_CAL -> R.drawable.pad_cross
 }
@@ -1681,53 +1681,88 @@ private fun releaseDpad(state: DpadState) {
 }
 
 /* -------------------------------------------------------------------- */
-/*  Taiko drum widget — one disc, four head buttons + two rim triggers   */
+/*  Taiko drum widget — one disc, head zones (four or two) + two rim triggers   */
 /* -------------------------------------------------------------------- */
 
-/*  The Tatacon (太鼓) plays the way a real drum controller does: the head is split into four
- *  quadrants, each firing a button, and the rim's left / right halves stand in for L1 / R1. A finger
- *  may slide between zones (the code follows) and several fingers each hold their own zone at once,
- *  which is what a drum roll needs. Modelled on PPSSPP's TataconControl. The widget is free-
- *  resizable (see TouchControls.maxSizeDp) so it can be scaled to the whole drum area. */
+/*  The Tatacon (太鼓) plays the way a real drum controller does: the head is split into zones, each
+ *  firing a button, and the rim's left / right halves stand in for L1 / R1. A finger may slide
+ *  between zones (the code follows) and several fingers each hold their own zone at once, which is
+ *  what a drum roll needs. Modelled on PPSSPP's TataconControl. The widget is free-resizable (see
+ *  TouchControls.maxSizeDp) so it can be scaled to the whole drum area.
+ *
+ *  Two head layouts are shipped (see [TataconHead]): the four-quadrant drum, and a two-half drum for
+ *  PS2 1st-gen Taiko, which only reads D-Pad Left / ○ as its two don inputs. */
 
-/** The drum art's height / width. drawable/tatacon.png is 800x512, so the head is WIDER than it is
- *  tall and the hit test (and glow) use an ellipse, exactly as Vita3K's tatacon does. */
+/** The drum art's height / width. drawable/tatacon.png and tatacon_ps2_cs1.png are both 800x512, so
+ *  the head is WIDER than it is tall and the hit test (and glow) use an ellipse, exactly as
+ *  Vita3K's tatacon does. */
 private const val TATACON_ART_H_OVER_W = 512f / 800f
+
+/** How a drum's head is divided. Both layouts keep the same elliptical head, the same rim, and the
+ *  same free resize; only the head zones differ. */
+private enum class TataconHead {
+    /** Four quadrants — top-left up, bottom-left D-Pad Left, top-right ○, bottom-right × — the
+     *  Vita3K/PPSSPP layout, for Taiko games that read all four face inputs. */
+    QUAD,
+    /** Two halves — left = D-Pad Left (left don), right = ○ (right don). PS2 1st-gen Taiko maps only
+     *  those two drum inputs, so the QUAD head's up and × zones are dead there; this splits the head
+     *  in two and gives each half a bigger target. */
+    PS2,
+}
+
+/** The head layout for a drum widget. Both drums share [TouchButtonId.Kind.TATACON]. */
+private fun tataconHead(id: TouchButtonId): TataconHead =
+    if (id == TouchButtonId.TATACON_PS2) TataconHead.PS2 else TataconHead.QUAD
+
+/** The art for a drum widget. Both are 800x512 — see [TATACON_ART_H_OVER_W]. */
+private fun tataconArt(id: TouchButtonId): Int =
+    if (id == TouchButtonId.TATACON_PS2) R.drawable.tatacon_ps2_cs1 else R.drawable.tatacon
 
 /** The pad code a point ([dx], [dy]) from the widget's centre fires. [half] is half the widget's
  *  side. Ported from Vita3K's InputOverlayDrawableTatacon.zoneForTouch: the head is an ELLIPSE
  *  (donRatioX 0.28 of the image half-width, donRatioY 0.37 of the image half-height — the art is
  *  wider than tall, so its Y half is [TATACON_ART_H_OVER_W] of its X half), and everything else in
- *  the box is the rim. The head's quadrants are top-left up, bottom-left left, top-right ○,
- *  bottom-right ×; the whole rim is L1 on the left, R1 on the right. There is intentionally NO
- *  "off the drum" null: the entire (transparent) square is rim, so once the widget is scaled over
- *  the screen any touch outside the four head zones is L1/R1 — the point of the transparent margin. */
-private fun tataconCodeAt(dx: Float, dy: Float, half: Float): Int {
+ *  the box is the rim. [head] picks the division: QUAD is top-left up, bottom-left left, top-right
+ *  ○, bottom-right ×; PS2 is just left = D-Pad Left, right = ○. The whole rim is L1 on the left,
+ *  R1 on the right. There is intentionally NO "off the drum" null: the entire (transparent) square
+ *  is rim, so once the widget is scaled over the screen any touch outside the head zones is L1/R1 —
+ *  the point of the transparent margin. */
+private fun tataconCodeAt(dx: Float, dy: Float, half: Float, head: TataconHead): Int {
     // Vita3K normalises by the image half-width / half-height. Here [half] is the square's half and
     // the Fit image is exactly as wide as the square, so the image's Y half is ART_H_OVER_W * half.
     val nx = dx / half
     val ny = dy / (half * TATACON_ART_H_OVER_W)
     val donCheck = (nx / 0.28f) * (nx / 0.28f) + (ny / 0.37f) * (ny / 0.37f)
     if (donCheck < 1f) {
-        return when {
-            dx < 0f && dy < 0f -> KeyEvent.KEYCODE_DPAD_UP
-            dx < 0f            -> KeyEvent.KEYCODE_DPAD_LEFT
-            dy < 0f            -> KeyEvent.KEYCODE_BUTTON_B // ○
-            else               -> KeyEvent.KEYCODE_BUTTON_A // ×
+        return when (head) {
+            TataconHead.PS2 ->
+                if (dx < 0f) KeyEvent.KEYCODE_DPAD_LEFT else KeyEvent.KEYCODE_BUTTON_B // ○
+            TataconHead.QUAD -> when {
+                dx < 0f && dy < 0f -> KeyEvent.KEYCODE_DPAD_UP
+                dx < 0f            -> KeyEvent.KEYCODE_DPAD_LEFT
+                dy < 0f            -> KeyEvent.KEYCODE_BUTTON_B // ○
+                else               -> KeyEvent.KEYCODE_BUTTON_A // ×
+            }
         }
     }
     return if (dx < 0f) KeyEvent.KEYCODE_BUTTON_L1 else KeyEvent.KEYCODE_BUTTON_R1
 }
 
-/** The four head codes, for the hit glow. */
-private val TATACON_HEAD_CODES = setOf(
-    KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_LEFT,
-    KeyEvent.KEYCODE_BUTTON_B, KeyEvent.KEYCODE_BUTTON_A,
-)
+/** The head codes, for the hit glow, per layout. */
+private fun tataconHeadCodes(head: TataconHead): Set<Int> = when (head) {
+    TataconHead.QUAD -> setOf(
+        KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_LEFT,
+        KeyEvent.KEYCODE_BUTTON_B, KeyEvent.KEYCODE_BUTTON_A,
+    )
+    TataconHead.PS2 -> setOf(
+        KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_BUTTON_B,
+    )
+}
 
 @Composable
 private fun TataconWidget(cfg: TouchButtonCfg, edit: Boolean, blockers: List<Rect>) {
     val opacity = TouchControls.opacity.floatValue
+    val head = tataconHead(cfg.id)
     // Codes held right now, one entry per finger — a finger's entry changes as it slides between
     // zones. It only drives the hit glow; the send diffs what was held against what is now, so a
     // slide comes out as a release of the old zone and a press of the new one.
@@ -1740,7 +1775,7 @@ private fun TataconWidget(cfg: TouchButtonCfg, edit: Boolean, blockers: List<Rec
         // it is composed ABOVE the full-screen UnifiedTouchLayer, so Compose would hand it every
         // DOWN and a Select / Start button drawn on the rim (render-only under multi-touch) could
         // never be pressed. See TataconInputNode.
-        TataconInputElement(TataconParams(held = held, blockers = blockers))
+        TataconInputElement(TataconParams(held = held, blockers = blockers, head = head))
     }
 
     // PPSSPP/Vita3K press feedback: while any zone is held the drum brightens a touch (opacity
@@ -1753,10 +1788,11 @@ private fun TataconWidget(cfg: TouchButtonCfg, edit: Boolean, blockers: List<Rec
     val nudge = if (pressed) (cfg.sizeDp * 0.01f * TATACON_ART_H_OVER_W).dp else 0.dp
 
     Box(Modifier.fillMaxSize().then(pressMod)) {
-        // The player's own drum art (drawable/tatacon.png), shown whole and centred. Fit scales the
-        // image's width to the widget's side — the geometry the hit zones assume.
+        // The player's own drum art (drawable/tatacon.png, or tatacon_ps2_cs1.png for the PS2 drum),
+        // shown whole and centred. Fit scales the image's width to the widget's side — the geometry
+        // the hit zones assume.
         Image(
-            painter = painterResource(R.drawable.tatacon),
+            painter = painterResource(tataconArt(cfg.id)),
             contentDescription = cfg.id.label,
             contentScale = ContentScale.Fit,
             modifier = Modifier.fillMaxSize().offset(y = nudge).alpha(shownAlpha),
@@ -1767,7 +1803,7 @@ private fun TataconWidget(cfg: TouchButtonCfg, edit: Boolean, blockers: List<Rec
         // not the case here: the art is wider than tall). Note the colour: PPSSPP/Vita3K write their
         // constants as an Android ARGB int 0xFFFBAD96, which Compose reads the same way — this peach.
         androidx.compose.foundation.Canvas(Modifier.fillMaxSize().alpha(opacity)) {
-            if (held.value.any { it in TATACON_HEAD_CODES }) {
+            if (held.value.any { it in tataconHeadCodes(head) }) {
                 val c = Offset(size.width / 2f, size.height / 2f)
                 val half = size.minDimension / 2f
                 // Vita3K: glowWidth = halfWidth*0.46*1.1, glowHeight = halfHeight*0.60*1.1, gradient
@@ -1796,6 +1832,7 @@ private fun TataconWidget(cfg: TouchButtonCfg, edit: Boolean, blockers: List<Rec
 private data class TataconParams(
     val held: MutableState<List<Int>>,
     val blockers: List<Rect>,
+    val head: TataconHead,
 )
 
 private class TataconInputElement(val params: TataconParams) : ModifierNodeElement<TataconInputNode>() {
@@ -1850,7 +1887,7 @@ private class TataconInputNode(private var params: TataconParams) : Modifier.Nod
                 if (zones.remove(change.id) != null) changed = true
                 continue
             }
-            val code = tataconCodeAt(dx, dy, half)
+            val code = tataconCodeAt(dx, dy, half, params.head)
             if (zones[change.id] != code) {
                 zones[change.id] = code
                 changed = true
@@ -2602,7 +2639,7 @@ private fun Modifier.editGestures(cfg: TouchButtonCfg): Modifier =
             if (overlay.widthPx <= 0f || overlay.heightPx <= 0f) return@detectTransformGestures
             TouchControls.updateButton(cfg.id) { current ->
                 // The drum scales freely (no 28..220 ceiling); everything else stays thumb-sized.
-                val newSize = if (cfg.id == TouchButtonId.TATACON) {
+                val newSize = if (cfg.id.kind == TouchButtonId.Kind.TATACON) {
                     (current.sizeDp * zoom).coerceAtLeast(TouchControls.minSizeDp(cfg.id))
                 } else {
                     (current.sizeDp * zoom)
